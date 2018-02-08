@@ -131,8 +131,8 @@ class Solver(object):
 
             # train with real
             real_combined = torch.cat((data, target), 1)
-            real_prediction = self.discriminator.forward(real_combined)
-            real_d_loss = self.MSELoss(real_prediction, Variable(torch.zeros(real_prediction.size(2) * real_prediction.size(3)).cuda()))
+            real_prediction = self.discriminator(real_combined)
+            real_d_loss = self.MSELoss(real_prediction, Variable(torch.ones(real_prediction.size(2) * real_prediction.size(3)).cuda()))
 
             # Combined loss
             loss_d = (fake_d_loss + real_d_loss) * 0.5
@@ -145,8 +145,8 @@ class Solver(object):
             self.reset_grad()
             # First, G(A) should fake the discriminator
             fake_combined = torch.cat((data, fake_target), 1)
-            fake_prediction = self.discriminator.forward(fake_combined)
-            g_loss_mse = self.MSELoss(fake_prediction, Variable(torch.zeros(fake_prediction.size(2) * fake_prediction.size(3)).cuda()))
+            fake_prediction = self.discriminator(fake_combined)
+            g_loss_mse = self.MSELoss(fake_prediction, Variable(torch.ones(fake_prediction.size(2) * fake_prediction.size(3)).cuda()))
 
             # Second, G(A) = B
             g_loss_l1 = self.L1loss(fake_target, target) * self.lamb
@@ -160,7 +160,7 @@ class Solver(object):
         self.mode_switch('eval')
         avg_psnr = 0
         for (data, target) in self.testing_data_loader:
-            data, target = (data.cuda() if self.cuda() else data), (target.cuda() if self.cuda() else data)
+            data, target = (data.cuda() if self.cuda else data), (target.cuda() if self.cuda else data)
             data, target = Variable(data, volatile=True), Variable(target, volatile=True)
 
             prediction = self.generator(data)
