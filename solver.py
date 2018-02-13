@@ -4,8 +4,9 @@ from math import log10
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
 from torch.autograd import Variable
+from torch.backends import cudnn
+from torch.utils.data import DataLoader
 from dataset import get_training_set, get_test_set
 
 from model import Generator, Discriminator
@@ -55,6 +56,8 @@ class Solver(object):
         if self.cuda:
             self.generator.cuda()
             self.discriminator.cuda()
+            cudnn.benchmark = True
+
             self.MSELoss.cuda()
             self.L1loss.cuda()
 
