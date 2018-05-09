@@ -4,7 +4,6 @@ from math import log10
 
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 from torch.backends import cudnn
 from torch.utils.data import DataLoader
 from dataset import get_training_set, get_test_set
@@ -21,7 +20,8 @@ class Solver(object):
         self.discriminator = None
         self.MSELoss = None
         self.L1loss = None
-        self.cuda = torch.cuda.is_available()
+        self.GPU_IN_USE = torch.cuda.is_available()
+        self.device = torch.device('cuda' if self.GPU_IN_USE else 'cpu')
 
         # Training settings
         self.dataset = args.dataset
@@ -45,21 +45,19 @@ class Solver(object):
 
     def build_model(self):
         self.generator = Generator(in_channel=self.in_channel, out_channel=self.out_channel, g_conv_dim=self.g_conv_dim,
-                                   norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=9)
+                                   norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=9).to(self.device)
         self.generator.normal_init()
-        self.discriminator = Discriminator(in_channel=self.in_channel + self.out_channel, d_conv_dim=self.d_conv_dim, num_layers=3,
-                                           norm_layer=nn.BatchNorm2d, use_sigmoid=self.use_sigmoid)
+        self.discriminator = Discriminator(in_channel=self.in_channel + self.out_channel, d_conv_dim=self.d_conv_dim,
+                                           num_layers=3, norm_layer=nn.BatchNorm2d,
+                                           use_sigmoid=self.use_sigmoid).to(self.device)
         self.discriminator.normal_init()
         self.MSELoss = nn.MSELoss()
         self.L1loss = nn.L1Loss()
 
-        if self.cuda:
-            self.generator.cuda()
-            self.discriminator.cuda()
-            cudnn.benchmark = True
-
+        if self.GPU_IN_USE:
             self.MSELoss.cuda()
             self.L1loss.cuda()
+            cudnn.benchmark = True
 
         self.g_optimizer = torch.optim.Adam(self.generator.parameters(), lr=self.lr, betas=(self.beta_1, 0.999))
         self.d_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=self.lr, betas=(self.beta_1, 0.999))
@@ -68,15 +66,10 @@ class Solver(object):
         root_path = "datasets/"
         train_set = get_training_set(root_path + self.dataset)
         test_set = get_test_set(root_path + self.dataset)
-        self.training_data_loader = DataLoader(dataset=train_set, num_workers=self.threads, batch_size=self.batch_size, shuffle=True)
-        self.testing_data_loader = DataLoader(dataset=test_set, num_workers=self.threads, batch_size=self.batch_size, shuffle=False)
-
-    @staticmethod
-    def to_variable(x):
-        """Convert tensor to variable."""
-        if torch.cuda.is_available():
-            x = x.cuda()
-        return Variable(x)
+        self.training_data_loader = DataLoader(dataset=train_set, num_workers=self.threads, batch_size=self.batch_size,
+                                               shuffle=True)
+        self.testing_data_loader = DataLoader(dataset=test_set, num_workers=self.threads, batch_size=self.batch_size,
+                                              shuffle=False)
 
     @staticmethod
     def to_data(x):
@@ -111,6 +104,7 @@ class Solver(object):
         if mode == 'train':
             self.discriminator.train()
             self.generator.train()
+
         elif mode == 'eval':
             self.discriminator.eval()
             self.generator.eval()
@@ -119,7 +113,7 @@ class Solver(object):
         self.mode_switch('train')
         for i, (data, target) in enumerate(self.training_data_loader):
             # forward
-            data, target = self.to_variable(data), self.to_variable(target)
+            data, target = data.to(self.device), target.to(self.device)
             fake_target = self.generator(data)
 
             ###########################
@@ -130,12 +124,14 @@ class Solver(object):
             # train with fake
             fake_combined = torch.cat((data, fake_target), 1)
             fake_prediction = self.discriminator(fake_combined.detach())
-            fake_d_loss = self.MSELoss(fake_prediction, Variable(torch.zeros(fake_prediction.size(2) * fake_prediction.size(3)).cuda()))
+            fake_d_loss = self.MSELoss(fake_prediction, torch.zeros(1, 1, fake_prediction.size(2),
+                                                                    fake_prediction.size(3), device=self.device))
 
             # train with real
             real_combined = torch.cat((data, target), 1)
             real_prediction = self.discriminator(real_combined)
-            real_d_loss = self.MSELoss(real_prediction, Variable(torch.ones(real_prediction.size(2) * real_prediction.size(3)).cuda()))
+            real_d_loss = self.MSELoss(real_prediction, torch.ones(1, 1, real_prediction.size(2),
+                                                                   real_prediction.size(3), device=self.device))
 
             # Combined loss
             loss_d = (fake_d_loss + real_d_loss) * 0.5
@@ -149,7 +145,8 @@ class Solver(object):
             # First, G(A) should fake the discriminator
             fake_combined = torch.cat((data, fake_target), 1)
             fake_prediction = self.discriminator(fake_combined)
-            g_loss_mse = self.MSELoss(fake_prediction, Variable(torch.ones(fake_prediction.size(2) * fake_prediction.size(3)).cuda()))
+            g_loss_mse = self.MSELoss(fake_prediction, torch.ones(1, 1, fake_prediction.size(2),
+                                                                  fake_prediction.size(3), device=self.device))
 
             # Second, G(A) = B
             g_loss_l1 = self.L1loss(fake_target, target) * self.lamb
@@ -157,19 +154,21 @@ class Solver(object):
             loss_g.backward()
             self.g_optimizer.step()
 
-            print("({}/{}): Loss_D: {:.4f} Loss_G: {:.4f}".format(i, len(self.training_data_loader), loss_d.data[0], loss_g.data[0]))
+            print("({}/{}): Loss_D: {:.4f} Loss_G: {:.4f}".format(i, len(self.training_data_loader),
+                                                                  loss_d.item(), loss_g.item()))
 
     def test(self):
         self.mode_switch('eval')
         avg_psnr = 0
-        for (data, target) in self.testing_data_loader:
-            data, target = (data.cuda() if self.cuda else data), (target.cuda() if self.cuda else data)
-            data, target = Variable(data, volatile=True), Variable(target, volatile=True)
+        with torch.no_grad():
+            for (data, target) in self.testing_data_loader:
+                data, target = data.to(self.device), target.to(self.device)
 
-            prediction = self.generator(data)
-            mse = self.MSELoss(prediction, target)
-            psnr = 10 * log10(1 / mse.data[0])
-            avg_psnr += psnr
+                prediction = self.generator(data)
+                mse = self.MSELoss(prediction, target)
+                psnr = 10 * log10(1 / mse.data[0])
+                avg_psnr += psnr
+
         print("===> Avg. PSNR: {:.4f} dB".format(avg_psnr / len(self.testing_data_loader)))
 
     def run(self):

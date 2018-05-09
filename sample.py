@@ -13,7 +13,7 @@ parser = argparse.ArgumentParser(description='pix2pix-PyTorch-implementation')
 parser.add_argument('--dataset', required=False, default='facades')
 parser.add_argument('--model', type=str, default='checkpoint/facades/netG_model_epoch_1.pth',
                     help='model file to use')
-parser.add_argument('--cuda', action='store_true', help='use cuda')
+parser.add_argument('--GPU_IN_USE', action='store_true', help='use GPU_IN_USE')
 args = parser.parse_args()
 print(args)
 
